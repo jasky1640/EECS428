@@ -21,31 +21,31 @@ import netaddr
 # Jiaqi Yang jxy530
 class LoadBalancer(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
-    RYU_MAC = mac.haddr_to_bin('fe:ee:ee:ee:ee:ef')
-    RYU_IP = int(netaddr.IPAddress('10.0.0.100'))
-    ZERO_MAC = mac.haddr_to_bin('00:00:00:00:00:00')
-    BROADCAST_MAC = mac.haddr_to_bin('ff:ff:ff:ff:ff:ff')
+    RYU_MAC = 'fe:ee:ee:ee:ee:ef'
+    RYU_IP = '10.0.0.100'
+    ZERO_MAC = '00:00:00:00:00:00'
+    BROADCAST_MAC = 'ff:ff:ff:ff:ff:ff'
 
     # define the own attributes and states maintained by the controller
     def __init__(self, *args, **kwargs):
         super(LoadBalancer, self).__init__(*args, **kwargs)
 
-        # Hopefully read the json file
-        CONF = cfg.CONF[user-flags]
-        CONF.register_opts([
-            cfg.StrOpt('service_mac', default = '0A:00:00:00:00:01'),
-            cfg.ListOpt('service_ips', default = {"blue": "10.1.2.3", "red": "10.1.2.4"}),
-            cfg.ListOpt('server_ips', default = {"blue": ["10.0.0.5","10.0.0.6"], "red": ["10.0.0.7","10.0.0.8"]})])
+        conf_path = cfg.CONF["user_flags"]
+        print "conf_path is ", conf_path
+        with open(conf_path, 'r') as config_file:
+            config_dict = json.load(config_file)
         # Exposed mac address to clients
-        self.service_mac = config_dict.service_mac
+        self.service_mac = config_dict['service_mac']
         # Exposed ip address to clients for blue service
-        self.service_blue_ip = config_dict.service_ips[0]
+        self.service_blue_ip = config_dict['service_ips']['blue']
         # Exposed ip address to clients for red service
-        self.service_red_ip = config_dict.service_ips[1]
+        self.service_red_ip = config_dict['service_ips']['red']
         # List of real ip addresses for blue service
-        self.server_blue_ips = config_dict.server_ips[0]
+        self.server_blue_ips = config_dict['server_ips']['blue']
         # List of real ip addresses for red service
-        self.server_red_ips = config_dict.server_ips[1]
+        self.server_red_ips = config_dict['server_ips']['red']
+        print self.service_mac, self.service_blue_ip, self.service_red_ip, self.server_blue_ips, self.server_red_ips
+
         # Dictionary to store a ip address and its corresponding mac address
         self.ip_to_mac = {}
         self.mac_to_port = {}
@@ -65,12 +65,12 @@ class LoadBalancer(app_manager.RyuApp):
         # send the arp request packet
         buffer_id = 0xffffffff
         in_port = dp.ofproto.OFPP_LOCAL
-        actions = [dp.ofproto_parser.OFPActionOutput(ofproto.OFPP_FLOOD)]
+        actions = [dp.ofproto_parser.OFPActionOutput(dp.ofproto.OFPP_FLOOD)]
         msg = dp.ofproto_parser.OFPPacketOut(dp, buffer_id, in_port, actions, data)
         dp.send_msg(msg)
 
     # Send arp responds to server to acknowledge them the requested mac address
-    def send_arp_responds(self, dp, eth_dst, ip_dst, ip_src):
+    def send_arp_responds(self, dp, eth_dst, ip_dst, ip_src, in_port):
         # create ether and arp packets
         ether_pkt = ethernet.ethernet(eth_dst, self.service_mac, ether.ETH_TYPE_ARP)
         arp_pkt = arp.arp(hwtype=1, proto=ether.ETH_TYPE_IP, hlen=6, plen=4, opcode=arp.ARP_REPLY,
@@ -83,9 +83,8 @@ class LoadBalancer(app_manager.RyuApp):
 
         # send the arp request packet
         buffer_id = 0xffffffff
-        in_port = dp.ofproto.OFPP_LOCAL
-        actions = [dp.ofproto_parser.OFPActionOutput(1, 0)]
-        msg = dp.ofproto_parser.OFPPacketOut(dp, buffer_id, in_port, actions, data)
+        actions = [dp.ofproto_parser.OFPActionOutput(in_port)]
+        msg = dp.ofproto_parser.OFPPacketOut(dp, buffer_id, dp.ofproto.OFPP_LOCAL, actions, data)
         dp.send_msg(msg)
 
     # def send_proxied_arp_response(self):
@@ -109,7 +108,8 @@ class LoadBalancer(app_manager.RyuApp):
         inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
         # The controller sends this message to modify the flow table
         mod = parser.OFPFlowMod(datapath=datapath, priority=priority, idle_timeout=timeout, match=match,
-                                instruction=inst)
+                                instructions=inst)
+        print "New flow entry added", mod
         # Queue an OpenFlow message to send to the corresponding switch
         datapath.send_msg(mod)
 
@@ -130,9 +130,8 @@ class LoadBalancer(app_manager.RyuApp):
 
         # install table-miss flow entry
         match = parser.OFPMatch()
-        actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
-                                          ofproto.OFPCML_NO_BUFFER)]
-        self.add_flow(datapath, 0, match, actions)
+        actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER, ofproto.OFPCML_NO_BUFFER)]
+        self.add_flow_entry(datapath=dp, priority=0, match=match, actions=actions, timeout=0)
 
     # The switch sends the packet that received to the controller by this message
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
@@ -154,12 +153,8 @@ class LoadBalancer(app_manager.RyuApp):
         mac_dst = eth.dst
         # The source mac address
         mac_src = eth.src
-        self.mac_to_port[src] = in_port
-        self.logger.info("packet in %s %s %s", mac_src, mac_dst, in_port)
-
-        # Ignore the request not to the service mac address
-        if mac_dst != self.service_mac:
-            return
+        self.mac_to_port[mac_src] = in_port
+        self.logger.info("packet in %s %s %s %s", mac_src, mac_dst, in_port, eth.ethertype)
 
         # learn a mac address and its corresponding in_port
         # in_port is valid to represent a client/server in this specific topology
@@ -178,7 +173,7 @@ class LoadBalancer(app_manager.RyuApp):
             # Handle arp request packet
             if p_arp.opcode == arp.ARP_REQUEST:
                 # send arp response with exposed mac address
-                self.send_arp_responds(dp=dp, eth_dst=mac_src, ip_dst=ip_src, ip_src=ip_dst)
+                self.send_arp_responds(dp=dp, eth_dst=mac_src, ip_dst=ip_src, ip_src=ip_dst, in_port=in_port)
 
             # Ignore any other types of arp packet, arp reply is already handled by updating dict
             else:
@@ -194,30 +189,41 @@ class LoadBalancer(app_manager.RyuApp):
             if ip_src not in self.ip_to_mac:
                 self.ip_to_mac[ip_src] = mac_src
 
-            if ip_dst == self.service_blue_ip:
-                # Randomly select one of blue ips
-                selected_ip = random.choice(self.server_blue_ips)
-            elif ip_dst == self.service_red_ip:
-                # Randomly select one of red ips
-                selected_ip = random.choice(self.server_red_ips)
-            else:
-                # Ignore the packets that don't call blue and red ips
-                return
+            # Packet from client
+            if ip_dst == self.service_blue_ip or ip_dst == self.service_red_ip:
+                if ip_dst == self.service_blue_ip:
+                    # Randomly select one of blue ips
+                    selected_ip = random.choice(self.server_blue_ips)
+                else:
+                    # Randomly select one of red ips
+                    selected_ip = random.choice(self.server_red_ips)
+                selected_mac_addr = self.ip_to_mac[selected_ip]
 
-            # Insert the rule into the flow table
-            selected_mac_addr = self.ip_to_mac[selected_ip]
-            match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_src=ip_src, ipv4_dst=ip_dst,
-                                    eth_src=mac_src, eth_dst=self.service_mac)
-            actions = [parser.OFPActionOutput(self.mac_to_port[selected_mac_addr])]
-            self.add_flow_entry(datapath=dp, priority=1, match=match, actions=actions)
+                # Insert the rule into the flow table: from client to server
+                s_match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_src=ip_src, ipv4_dst=ip_dst,
+                                          eth_src=mac_src, eth_dst=self.service_mac)
+                s_actions = [parser.OFPActionSetField(eth_src=self.service_mac),
+                             parser.OFPActionSetField(eth_dst=selected_mac_addr),
+                             parser.OFPActionSetField(ipv4_dst=selected_ip),
+                             parser.OFPActionOutput(self.mac_to_port[selected_mac_addr])]
+                self.add_flow_entry(datapath=dp, priority=1, match=s_match, actions=s_actions)
 
-            # Send the packet to the server
-            data = None
-            if msg.buffer_id == ofproto.OFP_NO_BUFFER:
-                data = msg.data
-            out = parser.OFPPacketOut(datapath=dp, buffer_id=msg.buffer_id,
-                                      in_port=in_port, actions=actions, data=data)
-            dp.send_msg(out)
+                # Insert the rule into the flow table: from server back to client
+                c_match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_src=selected_ip, ipv4_dst=ip_src,
+                                          eth_src=selected_mac_addr, eth_dst=self.service_mac)
+                c_actions = [parser.OFPActionSetField(eth_src=self.service_mac),
+                             parser.OFPActionSetField(eth_dst=mac_src),
+                             parser.OFPActionSetField(ipv4_src=ip_dst),
+                             parser.OFPActionOutput(in_port)]
+                self.add_flow_entry(datapath=dp, priority=1, match=c_match, actions=c_actions)
+
+                # Send the packet to the server
+                data = None
+                if msg.buffer_id == ofproto.OFP_NO_BUFFER:
+                    data = msg.data
+                out = parser.OFPPacketOut(datapath=dp, buffer_id=msg.buffer_id,
+                                          in_port=in_port, actions=s_actions, data=data)
+                dp.send_msg(out)
 
         # Ignore any other types of packets
         else:
