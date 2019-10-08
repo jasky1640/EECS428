@@ -4,8 +4,10 @@ from ryu.controller.handler import MAIN_DISPATCHER
 from ryu.controller.handler import set_ev_cls
 from ryu.lib.packet import packet
 from ryu.ofproto import ofproto_v1_3
+#cfg
 
 import json
+import random
 
 class LoadBalancer(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
@@ -16,6 +18,7 @@ class LoadBalancer(app_manager.RyuApp):
         # WRITE YOUR CODE HERE
 
         # Hopefully read the json file
+        CONF = cfg.CONF['user-flags']
         with open('lb_config.json', 'r') as config_file:
             config_dict = json.load(config_file)
         # Exposed mac address to clients
@@ -28,6 +31,8 @@ class LoadBalancer(app_manager.RyuApp):
         self.server_blue_ips = config_dict['server_ips'][0]
         # List of real ip addresses for red service
         self.server_red_ips = config_dict['server_ips'][1]
+
+        self.mac_to_port = {}
 
     def send_arp_requests(self, dp):
         # send arp requests to servers to learn their mac addresses
@@ -55,7 +60,7 @@ class LoadBalancer(app_manager.RyuApp):
         # Actions instruction to apply the action
         inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
         # The controller sends this message to modify the flow table
-        mod = parser.OFPFlowMod(datapath=datapath, priority=priority, idle_timeout=10, match=match, instruction=inst)
+        mod = parser.OFPFlowMod(datapath=datapath, priority=priority, idle_timeout=timeout, match=match, instruction=inst)
         # Queue an OpenFlow message to send to the corresponding switch
         datapath.send_msg(mod)
 
@@ -71,16 +76,31 @@ class LoadBalancer(app_manager.RyuApp):
         ofproto = dp.ofproto
         # A module which exports OpenFlow wire message encoder and decoder for the negotiated OpenFlow version
         parser = dp.ofproto_parser
+        in_port = msg.match['in_port']
 
         pkt = packet.Packet(msg.data)
         # Return the firstly found protocol that matches to the specified protocol
         eth = pkt.get_protocol(ethernet.ethernet)
         mac_dst = eth.dst
         mac_src = eth.src
-        # Return the firstly found protocol that matches to the specified protocol
-        ip = pkt.get_protocol(ipv6.ipv6)
-        ip_dst = ip.dst
-        ip_src = ip.src
+
+        if mac_dst != self.service_mac:
+            # Ignore the request not to the service mac address
+            return
+
+        self.mac_to_port.setdefault(dpid, {})
+
+        self.logger.info("packet in %s %s %s %s", dpid, mac_src, mac_dst, in_port)
+
+        # learn a mac address to avoid FLOOD next time.
+        self.mac_to_port[dpid][src] = in_port
+
+        if dst in self.mac_to_port[dpid]:
+            out_port = self.mac_to_port[dpid][dst]
+        else:
+            out_port = ofproto.OFPP_FLOOD
+
+        action = [parser.OFPActionOutput(out_port)]
 
         if eth.ethertype == ether_types.ETH_TYPE_ARP:
             # handle arp packets
@@ -89,6 +109,29 @@ class LoadBalancer(app_manager.RyuApp):
         elif eth.ethertype == ether_types.ETH_TYPE_IP:
             # handle ip packets
             # WRITE YOUR CODE HERE
+
+            # Return the firstly found protocol that matches to the specified protocol
+            ip = pkt.get_protocol(ipv4.ipv4)
+            ip_dst = ip.dst
+            ip_src = ip.src
+            protocol = ip.protocol
+
+            if ip_dst == self.service_blue_ip:
+                # Randomly select one of blue ips
+                selected_ip = random.choice(self.server_blue_ips)
+            elif ip_dst == self.service_red_ip:
+                # Randomly select one of red ips
+                selected_ip = random.choice(self.server_red_ips)
+            else:
+                # Ignore the packets that don't call blue and red ips
+                return
+
+            if out_port != ofproto.OFPP_FLOOD:
+                # How to get dst mac address
+                match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_src=ip_src, ipv4_dst=selected_ip,
+                                        ip_proto=protocol, eth_src=self.service_mac, eth_dst=None, in_port=in_port)
+                self.add_flow_entry(datapath=dp, priority=1, match=match, actions=action)
+
 
     # When flow entries time out or are deleted, the switch notifies controller with this message
     @set_ev_cls(ofp_event.EventOFPFlowRemoved, MAIN_DISPATCHER)
