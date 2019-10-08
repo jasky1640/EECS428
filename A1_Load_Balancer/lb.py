@@ -14,6 +14,7 @@ import json
 import random
 import netaddr
 
+
 # Jiaqi Yang jxy530
 class LoadBalancer(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
@@ -27,7 +28,7 @@ class LoadBalancer(app_manager.RyuApp):
         super(LoadBalancer, self).__init__(*args, **kwargs)
 
         # Hopefully read the json file
-        config_dict = cfg.CONF.user-flags
+        config_dict = cfg.CONF.user - flags
         # Exposed mac address to clients
         self.service_mac = config_dict.service_mac
         # Exposed ip address to clients for blue service
@@ -41,6 +42,7 @@ class LoadBalancer(app_manager.RyuApp):
         # Dictionary to store a ip address and its corresponding mac address
         self.ip_to_mac = {}
         self.mac_to_port = {}
+
     # Send arp requests to servers to learn their mac addresses
     def send_arp_requests(self, dp, ip_dst):
         # create ether and arp packets
@@ -61,7 +63,7 @@ class LoadBalancer(app_manager.RyuApp):
         dp.send_msg(msg)
 
     # Send arp responds to server to acknowledge them the requested mac address
-    def send_arp_responds(self,dp, eth_dst, ip_dst, ip_src):
+    def send_arp_responds(self, dp, eth_dst, ip_dst, ip_src):
         # create ether and arp packets
         ether_pkt = ethernet.ethernet(eth_dst, self.service_mac, ether.ETH_TYPE_ARP)
         arp_pkt = arp.arp(hwtype=1, proto=ether.ETH_TYPE_IP, hlen=6, plen=4, opcode=arp.ARP_REPLY,
@@ -75,19 +77,19 @@ class LoadBalancer(app_manager.RyuApp):
         # send the arp request packet
         buffer_id = 0xffffffff
         in_port = dp.ofproto.OFPP_LOCAL
-        actions = [dp.ofproto_parser.OFPActionOutput(1,0)]
+        actions = [dp.ofproto_parser.OFPActionOutput(1, 0)]
         msg = dp.ofproto_parser.OFPPacketOut(dp, buffer_id, in_port, actions, data)
         dp.send_msg(msg)
 
     # def send_proxied_arp_response(self):
-        # relay arp response to clients or servers
-        # no need to insert entries into the flow table
-        # WRITE YOUR CODE HERE
+    # relay arp response to clients or servers
+    # no need to insert entries into the flow table
+    # WRITE YOUR CODE HERE
 
-    #def send_proxied_arp_request(self):
-        # relay arp requests to clients or servers
-        # no need to insert entries into the flow table
-        # WRITE YOUR CODE HERE
+    # def send_proxied_arp_request(self):
+    # relay arp requests to clients or servers
+    # no need to insert entries into the flow table
+    # WRITE YOUR CODE HERE
 
     # helper function to insert flow entries into flow table
     # by default, the idle_timeout is set to be 10 seconds
@@ -99,7 +101,8 @@ class LoadBalancer(app_manager.RyuApp):
         # Actions instruction to apply the action
         inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
         # The controller sends this message to modify the flow table
-        mod = parser.OFPFlowMod(datapath=datapath, priority=priority, idle_timeout=timeout, match=match, instruction=inst)
+        mod = parser.OFPFlowMod(datapath=datapath, priority=priority, idle_timeout=timeout, match=match,
+                                instruction=inst)
         # Queue an OpenFlow message to send to the corresponding switch
         datapath.send_msg(mod)
 
@@ -180,7 +183,6 @@ class LoadBalancer(app_manager.RyuApp):
             p_ip = pkt.get_protocol(ipv4.ipv4)
             ip_dst = p_ip.dst
             ip_src = p_ip.src
-            protocol = p_ip.protocol
             # Update ip_to_mac dictionary
             if ip_src not in self.ip_to_mac:
                 self.ip_to_mac[ip_src] = mac_src
