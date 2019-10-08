@@ -1,11 +1,14 @@
 from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import MAIN_DISPATCHER
+from ryu.controller.handler import CONFIG_DISPATCHER
 from ryu.controller.handler import set_ev_cls
 from ryu.lib import mac
 from ryu.lib.packet import packet
 from ryu.lib.packet import ipv4
 from ryu.lib.packet import arp
+from ryu.lib.packet import ethernet
+from ryu.lib.packet import ether_types
 from ryu.ofproto import ofproto_v1_3
 from ryu.ofproto import ether
 from ryu import cfg
@@ -28,7 +31,11 @@ class LoadBalancer(app_manager.RyuApp):
         super(LoadBalancer, self).__init__(*args, **kwargs)
 
         # Hopefully read the json file
-        config_dict = cfg.CONF.user - flags
+        CONF = cfg.CONF[user-flags]
+        CONF.register_opts([
+            cfg.StrOpt('service_mac', default = '0A:00:00:00:00:01'),
+            cfg.ListOpt('service_ips', default = {"blue": "10.1.2.3", "red": "10.1.2.4"}),
+            cfg.ListOpt('server_ips', default = {"blue": ["10.0.0.5","10.0.0.6"], "red": ["10.0.0.7","10.0.0.8"]})])
         # Exposed mac address to clients
         self.service_mac = config_dict.service_mac
         # Exposed ip address to clients for blue service
