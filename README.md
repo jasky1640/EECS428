@@ -1,2 +1,1 @@
-# EECS428
-For CWRU EECS428
+
